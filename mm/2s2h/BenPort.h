@@ -50,6 +50,7 @@ class OTRGlobals {
     ImFont* fontStandard = nullptr;
     ImFont* fontStandardLarger = nullptr;
     ImFont* fontStandardLargest = nullptr;
+    ImFont* fontStartupTitle = nullptr;
     ImFont* fontMono = nullptr;
     ImFont* fontMonoLarger = nullptr;
     ImFont* fontMonoLargest = nullptr;

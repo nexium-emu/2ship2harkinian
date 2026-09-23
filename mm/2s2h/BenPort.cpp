@@ -50,6 +50,7 @@
 #include <fast/resource/ResourceType.h>
 #include <BenGui/BenGui.hpp>
 #include <BenGui/BenMenu.h>
+#include <BenGui/StartupAnimation.h>
 
 #include "2s2h/GameInteractor/GameInteractor.h"
 #include "2s2h/Enhancements/Enhancements.h"
@@ -191,6 +192,7 @@ OTRGlobals::OTRGlobals() {
         fontStandard = CreateFontWithSize(16.0f, "fonts/Montserrat-Regular.ttf");
         fontStandardLarger = CreateFontWithSize(20.0f, "fonts/Montserrat-Regular.ttf");
         fontStandardLargest = CreateFontWithSize(24.0f, "fonts/Montserrat-Regular.ttf");
+        fontStartupTitle = CreateFontWithSize(80.0f, "fonts/Montserrat-Regular.ttf");
         ImGui::GetIO().FontDefault = fontStandardLarger;
     }
 
@@ -964,6 +966,10 @@ extern "C" void InitOTR(int argc, char* argv[]) {
     OTRGlobals::Instance->RunExtract(argc, argv);
 
     OTRGlobals::Instance->Initialize();
+
+    if (!BenGui::RunStartupAnimation()) {
+        exit(0);
+    }
 
     std::shared_ptr<Ship::Config> conf = OTRGlobals::Instance->context->GetConfig();
     conf->RegisterVersionUpdater(std::make_shared<Ben::ConfigVersion1Updater>());
