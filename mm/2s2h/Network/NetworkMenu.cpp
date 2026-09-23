@@ -9,9 +9,11 @@ extern std::shared_ptr<BenMenu> mBenMenu;
 } // namespace BenGui
 using namespace UIWidgets;
 
+void RegisterAnchorMenu();
+
 void RegisterNetworkMenu() {
-    // Add Network Menu
-    // BenGui::mBenMenu->AddMenuEntry("Network", "gSettings.Menu.NetworkSidebarSection");
+    // Create the Network menu before registering its other sidebars.
+    RegisterAnchorMenu();
     WidgetPath path;
 
     // Sail

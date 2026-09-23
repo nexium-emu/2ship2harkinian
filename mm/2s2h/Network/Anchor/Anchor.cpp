@@ -18,7 +18,7 @@ extern PlayState* gPlayState;
 // MARK: - Overrides
 
 void Anchor::Enable() {
-    Network::Enable(CVarGetString("gNetwork.Anchor.Host", "anchor.proxysaw.dev"),
+    Network::Enable(CVarGetString("gNetwork.Anchor.Host", "anchor.hm64.org"),
                     CVarGetInteger("gNetwork.Anchor.Port", 43383));
     ownClientId = CVarGetInteger("gNetwork.Anchor.LastClientId", 0);
     roomState.ownerClientId = 0;

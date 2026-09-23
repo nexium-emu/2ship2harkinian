@@ -241,5 +241,3 @@ void RegisterAnchorMenu() {
     BenGui::mBenMenu->AddWidget(path, "AnchorAdminMenu", WIDGET_CUSTOM).CustomFunction(AnchorAdminMenu);
     BenGui::mBenMenu->AddWidget(path, "AnchorInstructionsMenu", WIDGET_CUSTOM).CustomFunction(AnchorInstructionsMenu);
 }
-
-static RegisterMenuInitFunc menuInitFunc(RegisterAnchorMenu);
