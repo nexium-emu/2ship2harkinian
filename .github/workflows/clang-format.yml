@@ -1,20 +1,29 @@
 name: clang-format
+
 on: [pull_request]
+
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
 jobs:
   clang-format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
-          fetch-depth: 2
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
       - name: Install clang-format
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-format-14
-      - name: Run clang-format
-        run: |
-          ./run-clang-format.sh
-          git diff --exit-code
+      - name: Check changed source files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/check-format.sh "$BASE_SHA" "$HEAD_SHA"

@@ -3,61 +3,117 @@ name: pr-artifacts
 on:
   workflow_run:
     workflows: [generate-builds]
-    types:
-      - completed
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: pr-artifacts-${{ github.event.workflow_run.head_repository.id }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
 
 jobs:
   pr-artifacts:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
     steps:
-      - id: 'pr-number'
-        uses: actions/github-script@v7
+      # This privileged job reads API metadata only. Never check out PR code or
+      # download or execute an artifact here, including scripts inside archives.
+      - name: Update pull request build links
+        uses: actions/github-script@v9
         with:
-          result-encoding: string
           script: |
-            const {owner, repo} = context.repo;
-            const pullHeadSHA = '${{github.event.workflow_run.head_sha}}';
-            const pullUserId = ${{github.event.sender.id}};
-            const prNumber = await (async () => {
-              for await (const { data } of github.paginate.iterator(
-                github.rest.pulls.list, { owner, repo }
-              )) {
-                for (const pull of data) {
-                  if (pull.head.sha === pullHeadSHA && pull.user.id === pullUserId) {
-                    return pull.number;
-                  }
-                }
-              }
-            })();
+            const { owner, repo } = context.repo;
+            const run = context.payload.workflow_run;
+            const matchesRun = pull =>
+              pull.state === 'open' &&
+              pull.base.repo.id === context.payload.repository.id &&
+              pull.head.sha === run.head_sha &&
+              pull.head.repo?.id === run.head_repository?.id;
 
-            if (!prNumber) {
-              return core.error(`No matching pull request found`);
+            let pull;
+            for (const candidate of run.pull_requests ?? []) {
+              const { data } = await github.rest.pulls.get({
+                owner, repo, pull_number: candidate.number,
+              });
+              if (matchesRun(data)) {
+                pull = data;
+                break;
+              }
+            }
+            // Fork runs can omit pull_requests from the workflow_run payload.
+            if (!pull) {
+              for await (const { data } of github.paginate.iterator(
+                github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 }
+              )) {
+                pull = data.find(matchesRun);
+                if (pull) break;
+              }
+            }
+            if (!pull) {
+              core.info('No open pull request matches this repository and head commit.');
+              return;
             }
 
-            return prNumber;
-      - id: 'artifacts-text'
-        uses: actions/github-script@v7
-        with:
-          result-encoding: string
-          script: |
-            let allArtifacts = await github.rest.actions.listWorkflowRunArtifacts({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              run_id: context.payload.workflow_run.id,
+            const artifacts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { owner, repo, run_id: run.id, per_page: 100 }
+            );
+            const packages = [
+              ['2ship-windows', 'Windows'],
+              ['2ship-linux', 'Linux'],
+              ['2ship-mac', 'macOS'],
+            ];
+            const runUrl = `${context.serverUrl}/${owner}/${repo}/actions/runs/${run.id}`;
+            const links = packages.flatMap(([name, label]) => {
+              const artifact = artifacts.filter(item => item.name === name && !item.expired)
+                .sort((a, b) => b.id - a.id)[0];
+              return artifact ? [`- [${label}](${runUrl}/artifacts/${artifact.id})`] : [];
             });
+            if (!links.length) {
+              core.info('No downloadable build packages remain for this run.');
+              return;
+            }
 
-            return allArtifacts.data.artifacts.reduce((acc, item) => {
-              if (item.name === "assets") return acc;
-              if (item.name === "2ship.o2r") return acc;
-              acc += `
-              - [${item.name}.zip](https://nightly.link/${context.repo.owner}/${context.repo.repo}/actions/artifacts/${item.id}.zip)`;
-              return acc;
-            }, '### Build Artifacts');
-      - id: 'add-to-pr'
-        uses: garrettjoecox/pr-section@4.0.0
-        with:
-          repo-token: '${{ secrets.GITHUB_TOKEN }}'
-          pr-number: ${{ steps.pr-number.outputs.result }}
-          section-name: 'artifacts'
-          section-value: '${{ steps.artifacts-text.outputs.result }}'
+            const marker = '<!-- 2ship-build-artifacts -->';
+            const body = [
+              marker,
+              '### Test builds',
+              '',
+              `Built from ${run.head_sha.slice(0, 12)} in [run #${run.run_number}](${runUrl}).`,
+              '',
+              ...links,
+              '',
+              'Sign in to GitHub to download. These are temporary test builds, not releases.',
+            ].join('\n');
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: pull.number, per_page: 100,
+            });
+            const existing = comments.find(comment =>
+              comment.user?.login === 'github-actions[bot]' &&
+              comment.user?.type === 'Bot' &&
+              comment.body?.includes(marker)
+            );
+
+            // Check again immediately before writing in case the PR advanced.
+            const { data: current } = await github.rest.pulls.get({
+              owner, repo, pull_number: pull.number,
+            });
+            if (!matchesRun(current)) {
+              core.info('The pull request changed while collecting artifacts; skipping.');
+              return;
+            }
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pull.number, body,
+              });
+            }
