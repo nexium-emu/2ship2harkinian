@@ -1,0 +1,202 @@
+name: releases
+
+on:
+  push:
+    tags: ['v*']
+  workflow_run:
+    workflows: [generate-builds]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-pipeline-${{ github.event.workflow_run.head_sha || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       vars.ENABLE_PREVIEW_RELEASES != 'false')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.metadata.outputs.tag }}
+      version: ${{ steps.metadata.outputs.version }}
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+      commit: ${{ steps.metadata.outputs.commit }}
+      channel: ${{ steps.metadata.outputs.channel }}
+    steps:
+      - name: Skip superseded preview builds
+        if: github.event_name == 'workflow_run'
+        id: current
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const source = await github.rest.repos.getCommit({ ...context.repo, ref: 'main' });
+            const current = source.data.sha === context.payload.workflow_run.head_sha;
+            if (!current) core.notice('A newer main commit supersedes this preview.');
+            return current;
+      - uses: actions/checkout@v6
+        if: steps.current.outputs.result != 'false'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Validate release version and source
+        id: metadata
+        if: steps.current.outputs.result != 'false'
+        env:
+          SOURCE_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          SOURCE_TAG: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            python3 .github/scripts/release_assets.py metadata --cmake CMakeLists.txt \
+              --commit "$SOURCE_COMMIT" --channel preview
+          else
+            if [[ "$SOURCE_REF" != refs/tags/v* ]]; then
+              echo 'Run a version tag (vX.Y.Z or vX.Y.Z-rc.1), or rerun its failed release workflow.' >&2
+              exit 1
+            fi
+            python3 .github/scripts/release_assets.py metadata --cmake CMakeLists.txt \
+              --commit "$SOURCE_COMMIT" --channel tag --tag "$SOURCE_TAG"
+          fi
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.channel == 'tag'
+    uses: ./.github/workflows/main.yml
+    permissions:
+      contents: read
+
+  publish:
+    needs: [prepare, build]
+    if: >-
+      always() && needs.prepare.result == 'success' &&
+      (needs.prepare.outputs.channel == 'preview' || needs.build.result == 'success')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+      RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      RELEASE_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+      BUILD_RUN_ID: ${{ github.event.workflow_run.id || github.run_id }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - name: Download the successful build's packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: 2ship-*
+          path: artifacts
+          github-token: ${{ github.token }}
+          run-id: ${{ env.BUILD_RUN_ID }}
+      - name: Validate packages and generate checksums
+        env:
+          BUILD_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ env.BUILD_RUN_ID }}
+        run: |
+          tag_args=()
+          if [[ "$RELEASE_CHANNEL" == tag ]]; then
+            tag_args=(--tag "$RELEASE_TAG")
+          fi
+          python3 .github/scripts/release_assets.py package --cmake CMakeLists.txt \
+            --commit "$RELEASE_COMMIT" --channel "$RELEASE_CHANNEL" "${tag_args[@]}" \
+            --input-dir artifacts --output-dir dist --run-url "$BUILD_RUN_URL"
+      - name: Prepare a draft release
+        id: draft
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag = process.env.RELEASE_TAG;
+            const commit = process.env.RELEASE_COMMIT;
+            const prerelease = process.env.RELEASE_PRERELEASE === 'true';
+            if (process.env.RELEASE_CHANNEL === 'tag') {
+              const source = await github.rest.repos.getCommit({ owner, repo, ref: tag });
+              if (source.data.sha !== commit) throw new Error('The release tag moved after the build.');
+            }
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              // Tag lookup may omit drafts; list releases to resume an interrupted upload.
+              for await (const page of github.paginate.iterator(github.rest.repos.listReleases, {
+                owner, repo, per_page: 100
+              })) {
+                release = page.data.find(item => item.tag_name === tag);
+                if (release) break;
+              }
+            }
+            if (release && release.target_commitish !== commit) {
+              throw new Error('An existing release points to a different source commit.');
+            }
+            if (release && !release.draft) {
+              core.setOutput('published', 'true');
+              await core.summary.addLink('Release already published', release.html_url).write();
+              return;
+            }
+            if (!release) {
+              const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${process.env.BUILD_RUN_ID}`;
+              let body = prerelease
+                ? 'Preview build for testing. Back up your saves before upgrading.\n\n'
+                : 'Versioned release of the Mythrax continuation of 2 Ship 2 Harkinian.\n\n';
+              body += 'Download the package for your platform below. SHA256SUMS verifies the downloads; ' +
+                'build-info.json records the exact source and build. Game ROMs are not included.\n\n' +
+                'Anchor players must use the same build. Anchor is developed by [garrettjoecox](https://github.com/garrettjoecox/2ship2harkinian/tree/anchor).\n\n' +
+                `Source: ${commit}\n\n[Build run](${run})\n`;
+              if (process.env.RELEASE_CHANNEL === 'tag') {
+                const notes = await github.rest.repos.generateReleaseNotes({
+                  owner, repo, tag_name: tag, target_commitish: commit
+                });
+                body += `\n${notes.data.body}`;
+              }
+              release = (await github.rest.repos.createRelease({
+                owner, repo, tag_name: tag, target_commitish: commit,
+                name: `2Ship ${tag}`, body, draft: true, prerelease
+              })).data;
+            }
+            core.setOutput('id', release.id);
+            core.setOutput('published', 'false');
+      - name: Upload all release assets
+        if: steps.draft.outputs.published != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber
+      - name: Publish the complete release
+        if: steps.draft.outputs.published != 'true'
+        uses: actions/github-script@v9
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.id }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const tag = process.env.RELEASE_TAG;
+            const commit = process.env.RELEASE_COMMIT;
+            try {
+              const source = await github.rest.repos.getCommit({ owner, repo, ref: tag });
+              if (source.data.sha !== commit) throw new Error('The release tag no longer matches the packages.');
+            } catch (error) {
+              // GitHub may defer creating a new preview tag until the draft is published.
+              if (error.status !== 404 || process.env.RELEASE_CHANNEL !== 'preview') throw error;
+            }
+            const release = await github.rest.repos.updateRelease({
+              owner, repo, release_id: Number(process.env.RELEASE_ID), draft: false,
+              make_latest: process.env.RELEASE_PRERELEASE === 'true' ? 'false' : 'legacy'
+            });
+            await core.summary.addLink('Published release', release.data.html_url).write();

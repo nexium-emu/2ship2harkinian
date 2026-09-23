@@ -1,19 +1,29 @@
 name: generate-builds
 on:
   push:
+    branches: ['**']
   pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: builds-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
+  checks:
+    uses: ./.github/workflows/checks.yml
 
   generate-2ship-otr:
+    needs: checks
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
     steps:
     - name: Git Checkout
       uses: actions/checkout@v6
       with:
-        submodules: true
+        submodules: recursive
+        persist-credentials: false
     - name: Configure ccache
       uses: hendrikmuhs/ccache-action@v1.2.22
       with:
@@ -25,7 +35,8 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y $(cat .github/workflows/apt-deps.txt) libzip-dev zipcmp zipmerge ziptool
+        read -r -a dependencies < .github/workflows/apt-deps.txt
+        sudo apt-get install -y "${dependencies[@]}" libzip-dev zipcmp zipmerge ziptool
     - name: Restore Cached deps folder
       uses: actions/cache/restore@v5
       with:
@@ -36,7 +47,7 @@ jobs:
         path: deps
     - name: Create deps folder
       run: mkdir -p deps
-    - name: Install latest SDL
+    - name: Install SDL 2.30.3
       run: |
         export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
         if [ ! -d "deps/SDL2-2.30.3" ]; then
@@ -48,9 +59,9 @@ jobs:
         make -j 10
         sudo make install
         sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
-    - name: Install latest tinyxml2
+    - name: Install tinyxml2 10.0.0
       run: |
-        sudo apt-get remove libtinyxml2-dev
+        sudo apt-get remove -y libtinyxml2-dev
         export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
         if [ ! -d "deps/tinyxml2-10.0.0" ]; then
           wget https://github.com/leethomason/tinyxml2/archive/refs/tags/10.0.0.tar.gz
@@ -59,29 +70,32 @@ jobs:
         cd deps/tinyxml2-10.0.0
         mkdir -p build
         cd build
-        cmake ..
+        cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         make
         sudo make install
     - name: Generate 2ship.o2r
       run: |
         export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
-        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release -DSKIP_NETWORKING=1
+        cmake -S . -B build-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DSKIP_NETWORKING=ON
         cmake --build build-cmake --config Release --target Generate2ShipOtr -j3
     - name: Upload 2ship.o2r
       uses: actions/upload-artifact@v7
       with:
         name: 2ship.o2r
         path: 2ship.o2r
+        if-no-files-found: error
         retention-days: 3
 
   build-macos:
     needs: generate-2ship-otr
-    runs-on: macos-14
+    runs-on: macos-15-intel
+    timeout-minutes: 120
     steps:
     - name: Git Checkout
       uses: actions/checkout@v6
       with:
         submodules: recursive
+        persist-credentials: false
     - name: Setup Macports
       uses: melusina-org/setup-macports@v1
       with:
@@ -89,7 +103,7 @@ jobs:
     - name: Configure ccache
       uses: hendrikmuhs/ccache-action@v1.2.22
       with:
-        key: ${{ runner.os }} # ccache-macos-{{ timestamp }}
+        key: ${{ runner.os }}-${{ runner.arch }}-macos-15
         max-size: "2G"
         evict-old-files: job
         save: ${{ github.ref_name == github.event.repository.default_branch }}
@@ -102,32 +116,37 @@ jobs:
       env:
         CCACHE_SLOPPINESS: pch_defines,time_macros
       run: |
-        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_C_FLAGS="-Xclang -fno-pch-timestamp" -DCMAKE_CXX_FLAGS="-Xclang -fno-pch-timestamp"
-        cmake --build build-cmake -j
-        (cd build-cmake && cpack)
+        cmake -S . -B build-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DSKIP_NETWORKING=OFF -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" -DCMAKE_C_FLAGS="-Xclang -fno-pch-timestamp" -DCMAKE_CXX_FLAGS="-Xclang -fno-pch-timestamp"
+        cmake --build build-cmake --config Release --parallel 3
+        (cd build-cmake && cpack -C Release -G Bundle)
 
-        mv _packages/*.dmg 2Ship.dmg
-        mv README.md readme.txt
+        mv _packages/*.dmg 2ship-macos-universal.dmg
+        cp README.md readme.txt
     - name: Upload build
       uses: actions/upload-artifact@v7
       with:
         name: 2ship-mac
+        if-no-files-found: error
+        retention-days: 14
         path: |
-          2Ship.dmg
+          2ship-macos-universal.dmg
           readme.txt
 
   build-linux:
     needs: generate-2ship-otr
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     steps:
     - name: Git Checkout
       uses: actions/checkout@v6
       with:
-        submodules: true
+        submodules: recursive
+        persist-credentials: false
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y $(cat .github/workflows/apt-deps.txt)
+        read -r -a dependencies < .github/workflows/apt-deps.txt
+        sudo apt-get install -y "${dependencies[@]}" gcc-12 g++-12
     - name: Configure ccache
       uses: hendrikmuhs/ccache-action@v1.2.22
       with:
@@ -147,7 +166,7 @@ jobs:
         path: deps
     - name: Create deps folder
       run: mkdir -p deps
-    - name: Install latest SDL
+    - name: Install SDL 2.30.3
       run: |
         export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
         if [ ! -d "deps/SDL2-2.30.3" ]; then
@@ -159,9 +178,9 @@ jobs:
         make -j 10
         sudo make install
         sudo cp -av /usr/local/lib/libSDL* /lib/x86_64-linux-gnu/
-    - name: Install latest tinyxml2
+    - name: Install tinyxml2 10.0.0
       run: |
-        sudo apt-get remove libtinyxml2-dev
+        sudo apt-get remove -y libtinyxml2-dev
         export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
         if [ ! -d "deps/tinyxml2-10.0.0" ]; then
           wget https://github.com/leethomason/tinyxml2/archive/refs/tags/10.0.0.tar.gz
@@ -170,10 +189,10 @@ jobs:
         cd deps/tinyxml2-10.0.0
         mkdir -p build
         cd build
-        cmake ..
+        cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         make
         sudo make install
-    - name: Install latest SDL_net
+    - name: Install SDL_net 2.2.0
       run: |
         export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
         if [ ! -d "SDL2_net-2.2.0" ]; then
@@ -195,7 +214,7 @@ jobs:
         cd deps/libzip-1.10.1
         mkdir -p build
         cd build
-        cmake .. -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=OFF
+        cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DENABLE_COMMONCRYPTO=OFF -DENABLE_GNUTLS=OFF -DENABLE_MBEDTLS=OFF -DENABLE_OPENSSL=OFF
         make
         sudo make install
         sudo cp -av /usr/local/lib/libzip* /lib/x86_64-linux-gnu/
@@ -207,12 +226,12 @@ jobs:
     - name: Build 2Ship
       run: |
         export PATH="/usr/lib/ccache:/usr/local/opt/ccache/libexec:$PATH"
-        cmake --no-warn-unused-cli -H. -Bbuild-cmake -GNinja -DCMAKE_BUILD_TYPE:STRING=Release
+        cmake -S . -B build-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DSKIP_NETWORKING=OFF
         cmake --build build-cmake --config Release -j3
-        (cd build-cmake && cpack -G External)
+        (cd build-cmake && cpack -C Release -G External)
 
-        mv README.md readme.txt
-        mv build-cmake/*.appimage 2ship.appimage
+        cp README.md readme.txt
+        mv build-cmake/*.appimage 2ship-linux-x86_64.AppImage
       env:
         CC: gcc-12
         CXX: g++-12
@@ -220,8 +239,10 @@ jobs:
       uses: actions/upload-artifact@v7
       with:
         name: 2ship-linux
+        if-no-files-found: error
+        retention-days: 14
         path: |
-          2ship.appimage
+          2ship-linux-x86_64.AppImage
           readme.txt
     - name: Save Cache deps folder
       if: ${{ github.ref_name == github.event.repository.default_branch }}
@@ -232,16 +253,14 @@ jobs:
 
   build-windows:
     needs: generate-2ship-otr
-    runs-on: windows-latest
+    runs-on: windows-2022
+    timeout-minutes: 120
     steps:
-    - name: Install dependencies
-      run: |
-        choco install ninja -y
-        Remove-Item -Path "C:\ProgramData\Chocolatey\bin\ccache.exe" -Force -ErrorAction SilentlyContinue
     - name: Git Checkout
       uses: actions/checkout@v6
       with:
-        submodules: true
+        submodules: recursive
+        persist-credentials: false
     - name: Configure sccache
       uses: hendrikmuhs/ccache-action@v1.2.22
       with:
@@ -255,7 +274,7 @@ jobs:
           ${{ runner.os }}-ccache
     - name: Restore Cached VCPKG folder
       id: restore-cache-vcpkg
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v5
       with:
         key: ${{ runner.os }}-vcpkg-${{ github.ref }}-${{ github.sha }}
         restore-keys: |
@@ -264,29 +283,36 @@ jobs:
         path: vcpkg
     - name: Configure Developer Command Prompt
       uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: x64
     - name: Download 2ship.o2r
       uses: actions/download-artifact@v8
       with:
         name: 2ship.o2r
         path: build-windows/mm
-    - name: Build 2Ship
+    - name: Configure 2Ship
       env:
-        VCPKG_ROOT: ${{github.workspace}}/vcpkg
+        VCPKG_ROOT: ${{ github.workspace }}/vcpkg
       run: |
-        set $env:PATH="$env:USERPROFILE/.cargo/bin;$env:PATH"
-        cmake -S . -B build-windows -G Ninja -DCMAKE_MAKE_PROGRAM=ninja -DCMAKE_BUILD_TYPE:STRING=Release -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-        cmake --build build-windows --config Release --parallel 10
-
-        (cd build-windows && cpack)
-        cd ..
-        mv _packages/*.zip _packages/2ship-windows.zip
-    - name: Unzip package
-      run: Expand-Archive -Path _packages/2ship-windows.zip -DestinationPath 2ship-windows
+        $env:PATH = "$env:USERPROFILE/.cargo/bin;$env:PATH"
+        cmake -S . -B build-windows -G Ninja -DCMAKE_MAKE_PROGRAM=ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" -DSKIP_NETWORKING=OFF -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+    - name: Build 2Ship
+      run: cmake --build build-windows --config Release --parallel 4
+    - name: Package 2Ship
+      working-directory: build-windows
+      run: |
+        cpack -C Release -G ZIP
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        $packages = @(Get-ChildItem -Path ../_packages/*.zip -File)
+        if ($packages.Count -ne 1) { throw "Expected one Windows ZIP, found $($packages.Count)" }
+        Move-Item -LiteralPath $packages[0].FullName -Destination ../_packages/2ship-windows.zip
     - name: Upload build
       uses: actions/upload-artifact@v7
       with:
         name: 2ship-windows
-        path: 2ship-windows
+        path: _packages/2ship-windows.zip
+        if-no-files-found: error
+        retention-days: 14
     - name: Save Cache VCPKG folder
       if: ${{ github.ref_name == github.event.repository.default_branch }}
       uses: actions/cache/save@v5
