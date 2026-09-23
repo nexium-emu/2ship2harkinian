@@ -28,6 +28,8 @@ assignees: ''
 - OS:
 - GFX Backend: Metal, OpenGL, or DirectX
 - Game Version:
+- Release tag or commit:
+- Mods, enhancements, or Anchor enabled:
 - Rom Version:
 
 ### Additional Information:

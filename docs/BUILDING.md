@@ -32,10 +32,10 @@ _Note: Instructions assume using powershell_
 cd 2ship2harkinian
 
 # Configure with Visual Studio 2022
-& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64 -DCMAKE_BUILD_TYPE=Release "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
 # Or configure with Visual Studio 2026 (choose one configure command)
-& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 18 2026" -T v145 -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 18 2026" -T v145 -A x64 -DCMAKE_BUILD_TYPE=Release "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
 # Generate 2ship.o2r
 & 'C:\Program Files\CMake\bin\cmake.exe' --build .\build\x64 --config Release --target Generate2ShipOtr
@@ -70,7 +70,7 @@ With the cmake build system you have two options for working on the project:
 To develop using Visual Studio you only need to use cmake to generate the solution file:
 ```powershell
 # Generates 2s2h.sln at `build/x64` for Visual Studio 2022
-& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64 -DCMAKE_BUILD_TYPE=Release "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 ```
 
 For Visual Studio 2026, use `-G "Visual Studio 18 2026" -T v145` instead. Select the `Release` configuration in Visual Studio to match the commands above.

@@ -6,7 +6,7 @@ labels: bug
 assignees: ''
 ---
 
-- [ ] I have checked checked the known issues and searched Github to ensure this issue has not already been reported.
+- [ ] I have searched existing issues to ensure this issue has not already been reported.
 
 ### Description of the inaccuracy:
 <!-- A clear and concise description of what the inaccuracy is and where it occurs in the game. -->
@@ -20,6 +20,7 @@ assignees: ''
 - OS:
 - GFX Backend: Metal, OpenGL, or DirectX
 - Game Version:
+- Release tag or commit:
 - Rom Version:
 
 ### Additional Information:

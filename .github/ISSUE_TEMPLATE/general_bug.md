@@ -1,13 +1,13 @@
 ---
 name: General Bug
-about: Other bugs related to 2Ship and it's features
+about: Report a bug in 2Ship or its features
 title: "Description of the bug"
 labels: bug
 assignees: ''
 ---
 
 - [ ] I have checked the known issues and searched Github to ensure this issue has not already been reported.
-- [ ] This is not a feature request, I know those belong on Discord/Github Discussions.
+- [ ] This is a bug report; proposed features use the feature request template.
 
 ### Description of the bug:
 <!-- A clear and concise description of what the bug or enhancement is. -->
@@ -31,6 +31,8 @@ assignees: ''
 - OS:
 - GFX Backend: Metal, OpenGL, or DirectX
 - Game Version:
+- Release tag or commit:
+- Mods, enhancements, or Anchor enabled:
 - Rom Version:
 
 ### Additional Information:
