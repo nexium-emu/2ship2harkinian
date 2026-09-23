@@ -3,45 +3,65 @@
 ## Windows
 
 Requires:
-  * At least 8GB of RAM (machines with 4GB have seen complier failures)
-  * Visual Studio 2022 Community Edition with the C++ feature set
+  * At least 8GB of RAM (machines with 4GB have seen compiler failures)
+  * Visual Studio 2022 or 2026 Community Edition with the C++ feature set
   * One of the Windows SDKs that comes with Visual Studio, for example the current Windows 10 version 10.0.19041.0
-  * The `MSVC v143 - VS 2022 C++ build tools` component of Visual Studio
+  * The matching MSVC build tools: v143 for Visual Studio 2022 or v145 for Visual Studio 2026
   * Python 3 (can be installed manually or as part of Visual Studio)
   * Git (can be installed manually or as part of Visual Studio)
-  * Cmake (can be installed via chocolatey or manually)
+  * CMake 3.26 or newer (can be installed via chocolatey or manually); Visual Studio 2026 requires CMake 4.2 or newer
 
 During installation, check the "Desktop development with C++" feature set:
 
 ![image](https://user-images.githubusercontent.com/30329717/183511274-d11aceea-7900-46ec-acb6-3f2cc110021a.png)
-Doing so should also check one of the Windows SDKs by default.  Then, in the installation details in the right-hand column, make sure you also check the v143 toolset. This is often done by default.
+Doing so should also check one of the Windows SDKs by default. Then, in the installation details in the right-hand column, make sure you also check the matching v143 or v145 toolset. This is often done by default.
 
 It is recommended that you install Python and Git standalone, the install process in VS Installer has given some issues in the past.
+
+If MSYS2 or devkitPro is installed, put native Git for Windows and Windows Python before their MSYS equivalents on `PATH`. To select Windows Python explicitly, append `-DPython3_EXECUTABLE="C:/path/to/python.exe"` to the configure command, using your installed Python path.
 
 1. Clone the 2 Ship 2 Harkinian repository
 
 _Note: Be sure to either clone with the ``--recursive`` flag or do ``git submodule update --init`` after cloning to pull in the libultraship submodule!_
 
-2. After setup and initial build, use the built-in O2R extraction to make your mm.o2r file.
+2. After setup and initial build, use the built-in O2R extraction to make your mm.o2r file from a supported ROM. Building the executable and generating 2ship.o2r do not require a ROM.
 
 _Note: Instructions assume using powershell_
 ```powershell
 # Navigate to the 2ship2harkinian repo within powershell. ie: cd "C:\yourpath\2ship2harkinian"
 cd 2ship2harkinian
 
-# Setup cmake project
-# Add `-DCMAKE_BUILD_TYPE:STRING=Release` if you're packaging
-& 'C:\Program Files\CMake\bin\cmake' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64
+# Configure with Visual Studio 2022
+& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+# Or configure with Visual Studio 2026 (choose one configure command)
+& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 18 2026" -T v145 -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
 # Generate 2ship.o2r
-& 'C:\Program Files\CMake\bin\cmake.exe' --build .\build\x64 --target Generate2ShipOtr
+& 'C:\Program Files\CMake\bin\cmake.exe' --build .\build\x64 --config Release --target Generate2ShipOtr
 
 # Compile project
-# Add `--config Release` if you're packaging
-& 'C:\Program Files\CMake\bin\cmake.exe' --build .\build\x64
+& 'C:\Program Files\CMake\bin\cmake.exe' --build .\build\x64 --config Release
 
-# Now you can run the executable in .\build\x64 or run in Visual Studio
+# The executable is .\x64\Release\2ship.exe, relative to the repository root
+
+# Assemble the executable, 2ship.o2r and supporting assets in one folder
+& 'C:\Program Files\CMake\bin\cmake.exe' --install .\build\x64 --config Release --component 2s2h --prefix .\build\windows-release
+
+# Run .\build\windows-release\2ship.exe to use the assembled folder
 ```
+
+`CMAKE_POLICY_VERSION_MINIMUM=3.5` allows CMake 4 to configure older bundled dependencies. Use a separate build directory when switching Visual Studio generators. See the [CMake Visual Studio 2026 generator documentation](https://cmake.org/cmake/help/latest/generator/Visual%20Studio%2018%202026.html) for generator and toolset details.
+
+### Anchor multiplayer
+
+This fork includes [Anchor Beta from garrettjoecox's Anchor branch](https://github.com/garrettjoecox/2ship2harkinian/commit/3820c56b44e8b94e99deb3a3648a8e2286d26348), together with its Sail networking prerequisites. Keep `SKIP_NETWORKING=OFF` (the default) when configuring; Anchor requires SDL2_net 2.2.0 or newer, installed automatically by vcpkg on Windows.
+
+Open the in-game menu with **F1**, then select **Network > Anchor**. Enter your name, room ID, and team ID before enabling the connection. The default server is `anchor.hm64.org:43383`. The Anchor panel includes co-op setup instructions; all players should use compatible Anchor builds. Networking stays disabled until enabled in the GUI, and a saved enabled setting reconnects on later launches.
+
+### Startup introduction
+
+On launch, a short purple-and-gold animation pairs the original 2Ship emblem with **Continued By Mythrax**. It runs once per launch before the normal game boot sequence and finishes automatically after 4.2 seconds. Press **Enter**, **Space**, a controller's **A**, **B**, or **Start** button, or click to skip it.
 
 ### Developing 2S2H
 With the cmake build system you have two options for working on the project:
@@ -50,8 +70,10 @@ With the cmake build system you have two options for working on the project:
 To develop using Visual Studio you only need to use cmake to generate the solution file:
 ```powershell
 # Generates 2s2h.sln at `build/x64` for Visual Studio 2022
-& 'C:\Program Files\CMake\bin\cmake' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64
+& 'C:\Program Files\CMake\bin\cmake.exe' -S . -B "build/x64" -G "Visual Studio 17 2022" -T v143 -A x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 ```
+
+For Visual Studio 2026, use `-G "Visual Studio 18 2026" -T v145` instead. Select the `Release` configuration in Visual Studio to match the commands above.
 
 #### Visual Studio Code or another editor
 To develop using Visual Studio Code or another editor you only need to open the repository in it.
@@ -68,20 +90,22 @@ After compiling the project you can generate the distributable by running:
 # Go to build folder
 cd "build/x64"
 # Generate
-& 'C:\Program Files\CMake\bin\cpack.exe' -G ZIP
+& 'C:\Program Files\CMake\bin\cpack.exe' -G ZIP -C Release
 ```
+
+The ZIP is written to `_packages` in the repository root.
 
 ### Additional CMake Targets
 #### Clean
 ```powershell
 # If you need to clean the project you can run
-C:\Program Files\CMake\bin\cmake.exe --build build-cmake --target clean
+& 'C:\Program Files\CMake\bin\cmake.exe' --build .\build\x64 --config Release --target clean
 ```
 
 #### Regenerate Asset Headers
 ```powershell
 # If you need to regenerate the asset headers to check them into source
-C:\Program Files\CMake\bin\cmake.exe --build build-cmake --target ExtractAssetHeaders
+& 'C:\Program Files\CMake\bin\cmake.exe' --build .\build\x64 --config Release --target ExtractAssetHeaders
 ```
 
 ## Linux
